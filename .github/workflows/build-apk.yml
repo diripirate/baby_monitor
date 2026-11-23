@@ -1,0 +1,75 @@
+name: Build APKs (Mobile & Wear OS)
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Debug APKs
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Make Gradlew Executable
+        run: chmod +x ./gradlew
+
+      - name: Build Mobile and Wear OS APKs
+        run: ./gradlew :mobile:assembleDebug :wear:assembleDebug --stacktrace
+
+      - name: Rename APKs for Easy Identification
+        run: |
+          mkdir -p build-apks
+          find mobile/build/outputs/apk/debug -name "*.apk" -exec cp {} build-apks/BabyMonitor-Mobile-debug.apk \;
+          find wear/build/outputs/apk/debug -name "*.apk" -exec cp {} build-apks/BabyMonitor-Wear-debug.apk \;
+          ls -la build-apks/
+
+      - name: Upload Mobile APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: BabyMonitor-Mobile-debug
+          path: build-apks/BabyMonitor-Mobile-debug.apk
+          if-no-files-found: error
+
+      - name: Upload Wear OS APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: BabyMonitor-Wear-debug
+          path: build-apks/BabyMonitor-Wear-debug.apk
+          if-no-files-found: error
+
+      - name: Create GitHub Release with APKs
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.0
+          name: Baby Monitor v1.0.0 (Pre-compiled APKs)
+          body: |
+            ## Baby Monitor v1.0.0
+            
+            Compiled APKs for both Android Phone and Wear OS Smartwatch:
+            - **BabyMonitor-Mobile-debug.apk**: Install on parent or baby Android phone.
+            - **BabyMonitor-Wear-debug.apk**: Install on parent or baby Wear OS smartwatch.
+          files: |
+            build-apks/BabyMonitor-Mobile-debug.apk
+            build-apks/BabyMonitor-Wear-debug.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
