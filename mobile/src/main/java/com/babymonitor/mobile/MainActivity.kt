@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -26,24 +27,37 @@ import com.babymonitor.mobile.ui.RoleSelectionScreen
 
 class MainActivity : ComponentActivity() {
 
-    private val requiredPermissions = buildList {
-        add(Manifest.permission.RECORD_AUDIO)
-        add(Manifest.permission.CAMERA)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            add(Manifest.permission.POST_NOTIFICATIONS)
-        }
-    }
+    private var pendingRole: DeviceRole? = null
+    private var onRoleAuthorized: ((DeviceRole) -> Unit)? = null
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { _ ->
-        requestIgnoreBatteryOptimizations()
+        val role = pendingRole
+        pendingRole = null
+        val callback = onRoleAuthorized
+        onRoleAuthorized = null
+        if (role != null && callback != null) {
+            val hasRequiredPermissions = role != DeviceRole.BABY || (
+                hasPermission(Manifest.permission.RECORD_AUDIO) &&
+                    hasPermission(Manifest.permission.CAMERA)
+                )
+            if (hasRequiredPermissions) {
+                callback(role)
+                startMonitoringService(role)
+                if (role == DeviceRole.BABY) requestIgnoreBatteryOptimizations()
+            } else {
+                Toast.makeText(
+                    this,
+                    "El modo bebé necesita permisos de micrófono y cámara.",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        checkAndRequestPermissions()
-
         setContent {
             MaterialTheme {
                 Surface(
@@ -63,8 +77,9 @@ class MainActivity : ComponentActivity() {
                         DeviceRole.UNSELECTED -> {
                             RoleSelectionScreen(
                                 onSelectRole = { role ->
-                                    currentRole = role
-                                    startMonitoringService(role)
+                                    requestRolePermissions(role) { authorizedRole ->
+                                        currentRole = authorizedRole
+                                    }
                                 }
                             )
                         }
@@ -139,16 +154,30 @@ class MainActivity : ComponentActivity() {
         startService(intent)
     }
 
-    private fun checkAndRequestPermissions() {
-        val missing = requiredPermissions.filter {
-            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+    private fun requestRolePermissions(role: DeviceRole, onAuthorized: (DeviceRole) -> Unit) {
+        val permissions = buildList {
+            if (role == DeviceRole.BABY) {
+                add(Manifest.permission.RECORD_AUDIO)
+                add(Manifest.permission.CAMERA)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                add(Manifest.permission.POST_NOTIFICATIONS)
+            }
         }
+        val missing = permissions.filterNot(::hasPermission)
         if (missing.isNotEmpty()) {
+            pendingRole = role
+            onRoleAuthorized = onAuthorized
             permissionLauncher.launch(missing.toTypedArray())
         } else {
-            requestIgnoreBatteryOptimizations()
+            onAuthorized(role)
+            startMonitoringService(role)
+            if (role == DeviceRole.BABY) requestIgnoreBatteryOptimizations()
         }
     }
+
+    private fun hasPermission(permission: String): Boolean =
+        ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
 
     private fun requestIgnoreBatteryOptimizations() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {

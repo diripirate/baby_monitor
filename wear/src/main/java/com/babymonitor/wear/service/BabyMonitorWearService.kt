@@ -41,6 +41,7 @@ class BabyMonitorWearService : Service() {
 
     private var activeAudioChannel: ChannelClient.Channel? = null
     private var videoJob: Job? = null
+    private var videoWatchRequested = false
 
     companion object {
         const val ACTION_START_BABY_MODE = "action_start_baby_mode"
@@ -56,6 +57,8 @@ class BabyMonitorWearService : Service() {
         // Fired by WearListenerService in response to phone messages
         const val ACTION_START_AUDIO_STREAM = "action_start_audio_stream"
         const val ACTION_STOP_AUDIO_STREAM = "action_stop_audio_stream"
+        private const val PREFS_NAME = "baby_monitor_wear_service"
+        private const val PREF_ACTIVE_ROLE = "active_role"
 
         private val _monitoringState = MutableStateFlow(MonitoringState())
         val monitoringState = _monitoringState.asStateFlow()
@@ -88,6 +91,18 @@ class BabyMonitorWearService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent == null) {
+            when (getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(PREF_ACTIVE_ROLE, null)) {
+                DeviceRole.BABY.name -> startBabyMode()
+                DeviceRole.PARENT.name -> startParentMode()
+                else -> {
+                    stopSelf(startId)
+                    return START_NOT_STICKY
+                }
+            }
+            return START_STICKY
+        }
+
         when (intent?.action) {
             ACTION_START_BABY_MODE -> startBabyMode()
             ACTION_START_PARENT_MODE -> startParentMode()
@@ -105,9 +120,15 @@ class BabyMonitorWearService : Service() {
             ACTION_VIDEO_STREAM_READY -> {
                 val stream = WearListenerService.pendingVideoInputStream
                 WearListenerService.pendingVideoInputStream = null
-                if (stream != null) {
+                if (stream != null && activeRole == DeviceRole.PARENT && videoWatchRequested) {
                     _monitoringState.update { it.copy(isVideoStreaming = true) }
                     onVideoStreamReceived(stream)
+                } else {
+                    try {
+                        stream?.close()
+                    } catch (e: Exception) {
+                        Log.e("BabyMonitorWearService", "Error closing unused video stream", e)
+                    }
                 }
             }
             // Triggered when the phone explicitly asks watch to start/stop mic streaming
@@ -119,14 +140,22 @@ class BabyMonitorWearService : Service() {
 
     private fun startBabyMode() {
         activeRole = DeviceRole.BABY
-        _monitoringState.update { it.copy(isRunning = true) }
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+            .putString(PREF_ACTIVE_ROLE, activeRole.name)
+            .apply()
+        videoWatchRequested = false
+        _monitoringState.update { it.copy(isRunning = true, isVideoStreaming = false) }
         startForegroundNotification("Reloj en Habitación", "Detectando sonido...")
         audioRecorder.start(serviceScope)
     }
 
     private fun startParentMode() {
         activeRole = DeviceRole.PARENT
-        _monitoringState.update { it.copy(isRunning = true) }
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+            .putString(PREF_ACTIVE_ROLE, activeRole.name)
+            .apply()
+        videoWatchRequested = false
+        _monitoringState.update { it.copy(isRunning = true, isVideoStreaming = false) }
         startForegroundNotification("Modo Receptor Reloj", "Vigilando al bebé...")
     }
 
@@ -182,12 +211,14 @@ class BabyMonitorWearService : Service() {
         val currentlyWatching = _monitoringState.value.isVideoStreaming
         serviceScope.launch {
             if (currentlyWatching) {
+                videoWatchRequested = false
                 wearManager.sendMessageToPhone(ProtocolConstants.PATH_CMD_STOP_VIDEO)
                 videoJob?.cancel()
                 videoJob = null
                 _latestVideoFrame.value = null
                 _monitoringState.update { it.copy(isVideoStreaming = false) }
             } else {
+                videoWatchRequested = true
                 wearManager.sendMessageToPhone(ProtocolConstants.PATH_CMD_START_VIDEO)
                 _monitoringState.update { it.copy(isVideoStreaming = true) }
             }
@@ -254,12 +285,16 @@ class BabyMonitorWearService : Service() {
         audioPlayer.stopPlayback()
         videoJob?.cancel()
         videoJob = null
+        videoWatchRequested = false
         _latestVideoFrame.value = null
 
         activeAudioChannel?.let { wearManager.closeChannel(it) }
 
         releaseWakeLock()
         activeRole = DeviceRole.UNSELECTED
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+            .remove(PREF_ACTIVE_ROLE)
+            .apply()
         _monitoringState.update { it.copy(isRunning = false, isAudioStreaming = false, isVideoStreaming = false) }
 
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -290,13 +325,12 @@ class BabyMonitorWearService : Service() {
             .build()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val serviceType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
-            } else {
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
+            val serviceType = when (activeRole) {
+                DeviceRole.BABY -> ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
                         ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+                DeviceRole.PARENT -> ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+                DeviceRole.UNSELECTED -> ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
             }
             startForeground(ProtocolConstants.NOTIFICATION_ID_FOREGROUND_SERVICE, notification, serviceType)
         } else {

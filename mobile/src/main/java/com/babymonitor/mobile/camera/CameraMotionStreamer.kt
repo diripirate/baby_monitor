@@ -131,23 +131,72 @@ class CameraMotionStreamer(
     }
 
     private fun imageProxyToJpeg(image: ImageProxy): ByteArray? {
-        val yBuffer = image.planes[0].buffer
-        val uBuffer = image.planes[1].buffer
-        val vBuffer = image.planes[2].buffer
+        if (image.format != ImageFormat.YUV_420_888 || image.width % 2 != 0 || image.height % 2 != 0) {
+            return null
+        }
 
-        val ySize = yBuffer.remaining()
-        val uSize = uBuffer.remaining()
-        val vSize = vBuffer.remaining()
+        val width = image.width
+        val height = image.height
+        val frameSize = width * height
+        val nv21 = ByteArray(frameSize + frameSize / 2)
+        val yPlane = image.planes[0]
+        val uPlane = image.planes[1]
+        val vPlane = image.planes[2]
 
-        val nv21 = ByteArray(ySize + uSize + vSize)
-        yBuffer.get(nv21, 0, ySize)
-        vBuffer.get(nv21, ySize, vSize)
-        uBuffer.get(nv21, ySize + vSize, uSize)
+        copyPlaneToNv21(
+            plane = yPlane,
+            width = width,
+            height = height,
+            destination = nv21,
+            destinationOffset = 0,
+            destinationPixelStride = 1
+        )
+        copyPlaneToNv21(
+            plane = vPlane,
+            width = width / 2,
+            height = height / 2,
+            destination = nv21,
+            destinationOffset = frameSize,
+            destinationPixelStride = 2
+        )
+        copyPlaneToNv21(
+            plane = uPlane,
+            width = width / 2,
+            height = height / 2,
+            destination = nv21,
+            destinationOffset = frameSize + 1,
+            destinationPixelStride = 2
+        )
 
-        val yuvImage = YuvImage(nv21, ImageFormat.NV21, image.width, image.height, null)
+        val yuvImage = YuvImage(nv21, ImageFormat.NV21, width, height, null)
         val out = ByteArrayOutputStream()
-        yuvImage.compressToJpeg(Rect(0, 0, image.width, image.height), ProtocolConstants.VIDEO_JPEG_QUALITY, out)
-        return out.toByteArray()
+        val compressed = yuvImage.compressToJpeg(
+            Rect(0, 0, width, height),
+            ProtocolConstants.VIDEO_JPEG_QUALITY,
+            out
+        )
+        return if (compressed) out.toByteArray() else null
+    }
+
+    private fun copyPlaneToNv21(
+        plane: ImageProxy.PlaneProxy,
+        width: Int,
+        height: Int,
+        destination: ByteArray,
+        destinationOffset: Int,
+        destinationPixelStride: Int
+    ) {
+        val buffer = plane.buffer
+        val basePosition = buffer.position()
+        var outputIndex = destinationOffset
+        for (row in 0 until height) {
+            val rowStart = basePosition + row * plane.rowStride
+            for (column in 0 until width) {
+                val inputIndex = rowStart + column * plane.pixelStride
+                destination[outputIndex] = buffer.get(inputIndex)
+                outputIndex += destinationPixelStride
+            }
+        }
     }
 
     fun switchCamera(lifecycleOwner: LifecycleOwner) {

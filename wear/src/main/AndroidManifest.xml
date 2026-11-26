@@ -8,6 +8,8 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Satisfies the Android 14 connectedDevice foreground-service prerequisite. -->
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
 
     <!-- Foreground Service permissions for Wear OS (Android 14+) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />

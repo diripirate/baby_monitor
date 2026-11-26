@@ -33,41 +33,53 @@ jobs:
       - name: Build Mobile and Wear OS APKs
         run: ./gradlew :mobile:assembleDebug :wear:assembleDebug --stacktrace
 
+      - name: Read app version
+        id: app-version
+        run: |
+          VERSION_NAME=$(sed -nE 's/.*versionName = "([^"]+)".*/\1/p' mobile/build.gradle.kts | head -n 1)
+          if [ -z "$VERSION_NAME" ]; then
+            echo "Could not read versionName from mobile/build.gradle.kts" >&2
+            exit 1
+          fi
+          echo "version=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+
       - name: Rename APKs for Easy Identification
+        env:
+          APP_VERSION: ${{ steps.app-version.outputs.version }}
         run: |
           mkdir -p build-apks
-          find mobile/build/outputs/apk/debug -name "*.apk" -exec cp {} build-apks/BabyMonitor-Mobile-debug.apk \;
-          find wear/build/outputs/apk/debug -name "*.apk" -exec cp {} build-apks/BabyMonitor-Wear-debug.apk \;
+          cp mobile/build/outputs/apk/debug/mobile-debug.apk "build-apks/BabyMonitor-Mobile-v${APP_VERSION}-debug.apk"
+          cp wear/build/outputs/apk/debug/wear-debug.apk "build-apks/BabyMonitor-Wear-v${APP_VERSION}-debug.apk"
           ls -la build-apks/
 
       - name: Upload Mobile APK
         uses: actions/upload-artifact@v4
         with:
-          name: BabyMonitor-Mobile-debug
-          path: build-apks/BabyMonitor-Mobile-debug.apk
+          name: BabyMonitor-Mobile-v${{ steps.app-version.outputs.version }}-debug
+          path: build-apks/BabyMonitor-Mobile-v${{ steps.app-version.outputs.version }}-debug.apk
           if-no-files-found: error
 
       - name: Upload Wear OS APK
         uses: actions/upload-artifact@v4
         with:
-          name: BabyMonitor-Wear-debug
-          path: build-apks/BabyMonitor-Wear-debug.apk
+          name: BabyMonitor-Wear-v${{ steps.app-version.outputs.version }}-debug
+          path: build-apks/BabyMonitor-Wear-v${{ steps.app-version.outputs.version }}-debug.apk
           if-no-files-found: error
 
       - name: Create GitHub Release with APKs
-        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.0
-          name: Baby Monitor v1.0.0 (Pre-compiled APKs)
+          tag_name: ${{ github.ref_name }}
+          name: Baby Monitor v${{ steps.app-version.outputs.version }}
           body: |
-            ## Baby Monitor v1.0.0
+            ## Baby Monitor v${{ steps.app-version.outputs.version }}
             
             Compiled APKs for both Android Phone and Wear OS Smartwatch:
-            - **BabyMonitor-Mobile-debug.apk**: Install on parent or baby Android phone.
-            - **BabyMonitor-Wear-debug.apk**: Install on parent or baby Wear OS smartwatch.
+            - **BabyMonitor-Mobile-v${{ steps.app-version.outputs.version }}-debug.apk**: Install on parent or baby Android phone.
+            - **BabyMonitor-Wear-v${{ steps.app-version.outputs.version }}-debug.apk**: Install on parent or baby Wear OS smartwatch.
           files: |
-            build-apks/BabyMonitor-Mobile-debug.apk
-            build-apks/BabyMonitor-Wear-debug.apk
+            build-apks/BabyMonitor-Mobile-v${{ steps.app-version.outputs.version }}-debug.apk
+            build-apks/BabyMonitor-Wear-v${{ steps.app-version.outputs.version }}-debug.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

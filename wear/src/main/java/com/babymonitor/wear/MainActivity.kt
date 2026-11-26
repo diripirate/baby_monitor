@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -21,20 +22,32 @@ import com.babymonitor.wear.ui.WearRoleSelectionScreen
 
 class MainActivity : ComponentActivity() {
 
-    private val requiredPermissions = buildList {
-        add(Manifest.permission.RECORD_AUDIO)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            add(Manifest.permission.POST_NOTIFICATIONS)
-        }
-    }
+    private var pendingRole: DeviceRole? = null
+    private var onRoleAuthorized: ((DeviceRole) -> Unit)? = null
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { _ -> }
+    ) { _ ->
+        val role = pendingRole
+        pendingRole = null
+        val callback = onRoleAuthorized
+        onRoleAuthorized = null
+        if (role != null) {
+            val hasMicrophone = ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.RECORD_AUDIO
+            ) == PackageManager.PERMISSION_GRANTED
+            if (role == DeviceRole.BABY && !hasMicrophone) {
+                Toast.makeText(this, "El modo bebé necesita permiso para usar el micrófono.", Toast.LENGTH_LONG).show()
+            } else {
+                callback?.invoke(role)
+                startWearService(role)
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        checkAndRequestPermissions()
 
         setContent {
             MaterialTheme {
@@ -53,8 +66,9 @@ class MainActivity : ComponentActivity() {
                         DeviceRole.UNSELECTED -> {
                             WearRoleSelectionScreen(
                                 onSelectRole = { role ->
-                                    currentRole = role
-                                    startWearService(role)
+                                    requestRolePermissions(role) { authorizedRole ->
+                                        currentRole = authorizedRole
+                                    }
                                 }
                             )
                         }
@@ -125,12 +139,23 @@ class MainActivity : ComponentActivity() {
         startService(intent)
     }
 
-    private fun checkAndRequestPermissions() {
-        val missing = requiredPermissions.filter {
+    private fun requestRolePermissions(role: DeviceRole, onAuthorized: (DeviceRole) -> Unit) {
+        val permissions = buildList {
+            if (role == DeviceRole.BABY) add(Manifest.permission.RECORD_AUDIO)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                add(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+        val missing = permissions.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
         if (missing.isNotEmpty()) {
+            pendingRole = role
+            onRoleAuthorized = onAuthorized
             permissionLauncher.launch(missing.toTypedArray())
+        } else {
+            onAuthorized(role)
+            startWearService(role)
         }
     }
 }

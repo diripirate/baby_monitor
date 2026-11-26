@@ -12,8 +12,8 @@ android {
         applicationId = "com.babymonitor.app"
         minSdk = 28 // Wear OS 2.0+ (Wear OS 3+ is API 30+)
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 3
+        versionName = "1.0.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

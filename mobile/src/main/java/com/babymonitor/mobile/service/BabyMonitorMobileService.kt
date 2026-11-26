@@ -56,6 +56,8 @@ class BabyMonitorMobileService : LifecycleService() {
         const val ACTION_STOP_VIDEO_STREAM = "action_stop_video_stream"
         const val ACTION_TOGGLE_TORCH = "action_toggle_torch"
         const val ACTION_SWITCH_CAMERA = "action_switch_camera"
+        private const val PREFS_NAME = "baby_monitor_mobile_service"
+        private const val PREF_ACTIVE_ROLE = "active_role"
 
         private val _monitoringState = MutableStateFlow(MonitoringState())
         val monitoringState = _monitoringState.asStateFlow()
@@ -88,6 +90,18 @@ class BabyMonitorMobileService : LifecycleService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
+        if (intent == null) {
+            when (getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(PREF_ACTIVE_ROLE, null)) {
+                DeviceRole.BABY.name -> startBabyMode()
+                DeviceRole.PARENT.name -> startParentMode()
+                else -> {
+                    stopSelf(startId)
+                    return START_NOT_STICKY
+                }
+            }
+            return START_STICKY
+        }
+
         when (intent?.action) {
             ACTION_START_BABY_MODE -> startBabyMode()
             ACTION_START_PARENT_MODE -> startParentMode()
@@ -103,6 +117,9 @@ class BabyMonitorMobileService : LifecycleService() {
 
     private fun startBabyMode() {
         activeRole = DeviceRole.BABY
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+            .putString(PREF_ACTIVE_ROLE, activeRole.name)
+            .apply()
         _monitoringState.update { it.copy(isRunning = true) }
 
         startForegroundNotification("Modo Habitación del Bebé activo", "Detectando sonido y movimiento...")
@@ -112,21 +129,18 @@ class BabyMonitorMobileService : LifecycleService() {
             audioRecorder.start(lifecycleScope)
         }
 
-        // Start Camera Motion & Streaming
+        // Start camera analysis for motion mode. In sound-only mode the camera
+        // is created on demand if the parent asks to view live video.
         if (_monitoringState.value.monitoringType != MonitoringType.SOUND_ONLY) {
-            cameraStreamer = CameraMotionStreamer(
-                context = this,
-                motionDetector = motionDetector,
-                onMotionResult = { /* Can publish telemetry */ },
-                onAlarmTriggered = { handleBabyMotionAlarm() }
-            ).apply {
-                startCamera(this@BabyMonitorMobileService)
-            }
+            ensureCameraStreamer()
         }
     }
 
     private fun startParentMode() {
         activeRole = DeviceRole.PARENT
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+            .putString(PREF_ACTIVE_ROLE, activeRole.name)
+            .apply()
         _monitoringState.update { it.copy(isRunning = true) }
         startForegroundNotification("Modo Padre activo", "Esperando alertas de la habitación...")
     }
@@ -167,13 +181,20 @@ class BabyMonitorMobileService : LifecycleService() {
     }
 
     fun startVideoStreamingToWatch() {
+        if (activeRole != DeviceRole.BABY) return
+        val streamer = ensureCameraStreamer()
         lifecycleScope.launch {
             val channel = wearableManager.openStreamChannel(ProtocolConstants.CHANNEL_VIDEO)
             if (channel != null) {
-                activeVideoChannel = channel
                 val out = wearableManager.getChannelOutputStream(channel)
-                cameraStreamer?.setStreamingTarget(out)
-                cameraStreamer?.isVideoStreaming = true
+                if (out == null || activeRole != DeviceRole.BABY) {
+                    wearableManager.closeChannel(channel)
+                    return@launch
+                }
+                activeVideoChannel?.let { wearableManager.closeChannel(it) }
+                activeVideoChannel = channel
+                streamer.setStreamingTarget(out)
+                streamer.isVideoStreaming = true
                 _monitoringState.update { it.copy(isVideoStreaming = true) }
             }
         }
@@ -185,6 +206,10 @@ class BabyMonitorMobileService : LifecycleService() {
         activeVideoChannel?.let { wearableManager.closeChannel(it) }
         activeVideoChannel = null
         _monitoringState.update { it.copy(isVideoStreaming = false) }
+        if (_monitoringState.value.monitoringType == MonitoringType.SOUND_ONLY) {
+            cameraStreamer?.stop()
+            cameraStreamer = null
+        }
     }
 
     fun toggleParentListening() {
@@ -209,8 +234,13 @@ class BabyMonitorMobileService : LifecycleService() {
     }
 
     fun switchCamera() {
-        cameraStreamer?.switchCamera(this)
-        _monitoringState.update { it.copy(isBackCamera = cameraStreamer?.isBackCamera ?: true) }
+        val streamer = cameraStreamer
+        if (streamer == null) {
+            _monitoringState.update { it.copy(isBackCamera = !it.isBackCamera) }
+        } else {
+            streamer.switchCamera(this)
+            _monitoringState.update { it.copy(isBackCamera = streamer.isBackCamera) }
+        }
     }
 
     fun updateThresholds(soundDb: Int, motionPercent: Int, type: MonitoringType) {
@@ -222,6 +252,30 @@ class BabyMonitorMobileService : LifecycleService() {
                 motionThresholdPercent = motionPercent,
                 monitoringType = type
             )
+        }
+        if (activeRole == DeviceRole.BABY) {
+            if (type == MonitoringType.SOUND_ONLY && !_monitoringState.value.isVideoStreaming) {
+                cameraStreamer?.stop()
+                cameraStreamer = null
+            } else if (type != MonitoringType.SOUND_ONLY) {
+                ensureCameraStreamer()
+            }
+            cameraStreamer?.isMotionDetectionActive = type != MonitoringType.SOUND_ONLY
+        }
+    }
+
+    private fun ensureCameraStreamer(): CameraMotionStreamer {
+        cameraStreamer?.let { return it }
+        return CameraMotionStreamer(
+            context = this,
+            motionDetector = motionDetector,
+            onMotionResult = { /* Can publish telemetry */ },
+            onAlarmTriggered = { handleBabyMotionAlarm() }
+        ).apply {
+            isBackCamera = _monitoringState.value.isBackCamera
+            isMotionDetectionActive = _monitoringState.value.monitoringType != MonitoringType.SOUND_ONLY
+            cameraStreamer = this
+            startCamera(this@BabyMonitorMobileService)
         }
     }
 
@@ -241,6 +295,9 @@ class BabyMonitorMobileService : LifecycleService() {
 
         releaseWakeLock()
         activeRole = DeviceRole.UNSELECTED
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+            .remove(PREF_ACTIVE_ROLE)
+            .apply()
         _monitoringState.update { it.copy(isRunning = false, isAudioStreaming = false, isVideoStreaming = false) }
 
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -271,14 +328,13 @@ class BabyMonitorMobileService : LifecycleService() {
             .build()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val serviceType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
+            val serviceType = when (activeRole) {
+                DeviceRole.BABY -> ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
                         ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA or
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
-            } else {
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
                         ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+                DeviceRole.PARENT -> ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+                DeviceRole.UNSELECTED -> ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
             }
             startForeground(ProtocolConstants.NOTIFICATION_ID_FOREGROUND_SERVICE, notification, serviceType)
         } else {
