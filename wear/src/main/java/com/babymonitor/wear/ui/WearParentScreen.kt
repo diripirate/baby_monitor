@@ -3,6 +3,7 @@ package com.babymonitor.wear.ui
 import android.graphics.Bitmap
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
@@ -23,12 +24,41 @@ import com.babymonitor.core.model.MonitoringState
 fun WearParentScreen(
     state: MonitoringState,
     latestFrame: Bitmap?,
+    isVideoFullscreen: Boolean,
     onToggleAudio: () -> Unit,
     onToggleVideo: () -> Unit,
+    onToggleVideoFullscreen: () -> Unit,
     onToggleTorch: () -> Unit,
     onSwitchCamera: () -> Unit,
     onExit: () -> Unit
 ) {
+    if (isVideoFullscreen) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+                .clickable(onClick = onToggleVideoFullscreen),
+            contentAlignment = Alignment.Center
+        ) {
+            if (latestFrame != null) {
+                Image(
+                    bitmap = latestFrame.asImageBitmap(),
+                    contentDescription = "Vídeo en directo. Toca para volver a los controles",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                Text(
+                    text = "Conectando vídeo...",
+                    fontSize = 14.sp,
+                    textAlign = TextAlign.Center,
+                    color = Color.LightGray
+                )
+            }
+        }
+        return
+    }
+
     ScalingLazyColumn(
         modifier = Modifier.fillMaxSize(),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -40,13 +70,14 @@ fun WearParentScreen(
                     modifier = Modifier
                         .size(130.dp)
                         .clip(CircleShape)
-                        .background(Color.Black),
+                        .background(Color.Black)
+                        .clickable(onClick = onToggleVideoFullscreen),
                     contentAlignment = Alignment.Center
                 ) {
                     if (latestFrame != null) {
                         Image(
                             bitmap = latestFrame.asImageBitmap(),
-                            contentDescription = "Live video from baby phone",
+                            contentDescription = "Vídeo en directo. Toca para ampliar",
                             contentScale = ContentScale.Crop,
                             modifier = Modifier.fillMaxSize()
                         )

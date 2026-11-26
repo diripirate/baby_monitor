@@ -51,7 +51,8 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             MaterialTheme {
-                Scaffold(timeText = { TimeText() }) {
+                var isVideoFullscreen by remember { mutableStateOf(false) }
+                Scaffold(timeText = { if (!isVideoFullscreen) TimeText() }) {
                     val state by BabyMonitorWearService.monitoringState.collectAsState()
                     val latestFrame by BabyMonitorWearService.latestVideoFrame.collectAsState()
                     var currentRole by remember { mutableStateOf(BabyMonitorWearService.activeRole) }
@@ -59,6 +60,12 @@ class MainActivity : ComponentActivity() {
                     LaunchedEffect(state.isRunning) {
                         if (!state.isRunning) {
                             currentRole = DeviceRole.UNSELECTED
+                        }
+                    }
+
+                    LaunchedEffect(currentRole, state.isVideoStreaming) {
+                        if (currentRole != DeviceRole.PARENT || !state.isVideoStreaming) {
+                            isVideoFullscreen = false
                         }
                     }
 
@@ -85,11 +92,15 @@ class MainActivity : ComponentActivity() {
                             WearParentScreen(
                                 state = state,
                                 latestFrame = latestFrame,
+                                isVideoFullscreen = isVideoFullscreen,
                                 onToggleAudio = {
                                     sendServiceAction(BabyMonitorWearService.ACTION_TOGGLE_AUDIO)
                                 },
                                 onToggleVideo = {
                                     sendServiceAction(BabyMonitorWearService.ACTION_TOGGLE_VIDEO)
+                                },
+                                onToggleVideoFullscreen = {
+                                    isVideoFullscreen = !isVideoFullscreen
                                 },
                                 onToggleTorch = {
                                     sendServiceAction(BabyMonitorWearService.ACTION_TOGGLE_TORCH)
