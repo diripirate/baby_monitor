@@ -6,7 +6,6 @@ import android.content.Context
 import android.content.Intent
 import android.util.Log
 import androidx.core.app.NotificationCompat
-import com.babymonitor.core.model.DeviceRole
 import com.babymonitor.core.protocol.ProtocolConstants
 import com.babymonitor.mobile.MainActivity
 import com.babymonitor.mobile.audio.AudioTrackPlayer
@@ -37,23 +36,25 @@ class MobileWearableListenerService : WearableListenerService() {
                 showAlarmNotification("¡Movimiento detectado!", "Se ha detectado movimiento en la cuna")
             }
             ProtocolConstants.PATH_CMD_START_AUDIO -> {
+                // Watch (in BABY mode) is being asked by the phone parent to stream mic
                 sendServiceAction(BabyMonitorMobileService.ACTION_TOGGLE_LISTEN)
             }
             ProtocolConstants.PATH_CMD_STOP_AUDIO -> {
                 sendServiceAction(BabyMonitorMobileService.ACTION_TOGGLE_LISTEN)
             }
+            // ── Video streaming: watch (PARENT) asking mobile (BABY) to open video feed ──
+            ProtocolConstants.PATH_CMD_START_VIDEO -> {
+                sendServiceAction(BabyMonitorMobileService.ACTION_START_VIDEO_STREAM)
+            }
+            ProtocolConstants.PATH_CMD_STOP_VIDEO -> {
+                sendServiceAction(BabyMonitorMobileService.ACTION_STOP_VIDEO_STREAM)
+            }
+            // ── Remote controls sent from watch to mobile ──
             ProtocolConstants.PATH_CMD_TOGGLE_TORCH -> {
-                // If service is running, it can toggle torch
-                val intent = Intent(this, BabyMonitorMobileService::class.java).apply {
-                    action = "ACTION_TOGGLE_TORCH"
-                }
-                startService(intent)
+                sendServiceAction(BabyMonitorMobileService.ACTION_TOGGLE_TORCH)
             }
             ProtocolConstants.PATH_CMD_SWITCH_CAMERA -> {
-                val intent = Intent(this, BabyMonitorMobileService::class.java).apply {
-                    action = "ACTION_SWITCH_CAMERA"
-                }
-                startService(intent)
+                sendServiceAction(BabyMonitorMobileService.ACTION_SWITCH_CAMERA)
             }
             ProtocolConstants.PATH_CMD_EXIT -> {
                 sendServiceAction(BabyMonitorMobileService.ACTION_STOP_SERVICE)
@@ -63,6 +64,8 @@ class MobileWearableListenerService : WearableListenerService() {
 
     override fun onChannelOpened(channel: ChannelClient.Channel) {
         Log.d("MobileWearableListener", "Channel opened: ${channel.path}")
+        // The mobile only receives incoming audio from the watch (BABY mode).
+        // Video channels are opened BY the mobile toward the watch, not the other way around.
         if (channel.path == ProtocolConstants.CHANNEL_AUDIO) {
             serviceScope.launch {
                 try {

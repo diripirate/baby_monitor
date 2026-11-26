@@ -50,6 +50,12 @@ class BabyMonitorWearService : Service() {
         const val ACTION_TOGGLE_VIDEO = "action_toggle_video"
         const val ACTION_TOGGLE_TORCH = "action_toggle_torch"
         const val ACTION_SWITCH_CAMERA = "action_switch_camera"
+        // Fired by WearListenerService when a channel InputStream is ready
+        const val ACTION_AUDIO_STREAM_READY = "action_audio_stream_ready"
+        const val ACTION_VIDEO_STREAM_READY = "action_video_stream_ready"
+        // Fired by WearListenerService in response to phone messages
+        const val ACTION_START_AUDIO_STREAM = "action_start_audio_stream"
+        const val ACTION_STOP_AUDIO_STREAM = "action_stop_audio_stream"
 
         private val _monitoringState = MutableStateFlow(MonitoringState())
         val monitoringState = _monitoringState.asStateFlow()
@@ -90,6 +96,23 @@ class BabyMonitorWearService : Service() {
             ACTION_TOGGLE_VIDEO -> toggleVideoWatching()
             ACTION_TOGGLE_TORCH -> toggleRemoteTorch()
             ACTION_SWITCH_CAMERA -> switchRemoteCamera()
+            // Triggered by WearListenerService when a channel is ready with an InputStream
+            ACTION_AUDIO_STREAM_READY -> {
+                val stream = WearListenerService.pendingAudioInputStream
+                WearListenerService.pendingAudioInputStream = null
+                if (stream != null) onAudioStreamReceived(stream)
+            }
+            ACTION_VIDEO_STREAM_READY -> {
+                val stream = WearListenerService.pendingVideoInputStream
+                WearListenerService.pendingVideoInputStream = null
+                if (stream != null) {
+                    _monitoringState.update { it.copy(isVideoStreaming = true) }
+                    onVideoStreamReceived(stream)
+                }
+            }
+            // Triggered when the phone explicitly asks watch to start/stop mic streaming
+            ACTION_START_AUDIO_STREAM -> startAudioStreamingToPhone()
+            ACTION_STOP_AUDIO_STREAM -> stopAudioStreamingToPhone()
         }
         return START_STICKY
     }

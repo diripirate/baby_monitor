@@ -52,6 +52,10 @@ class BabyMonitorMobileService : LifecycleService() {
         const val ACTION_START_PARENT_MODE = "action_start_parent_mode"
         const val ACTION_STOP_SERVICE = "action_stop_service"
         const val ACTION_TOGGLE_LISTEN = "action_toggle_listen"
+        const val ACTION_START_VIDEO_STREAM = "action_start_video_stream"
+        const val ACTION_STOP_VIDEO_STREAM = "action_stop_video_stream"
+        const val ACTION_TOGGLE_TORCH = "action_toggle_torch"
+        const val ACTION_SWITCH_CAMERA = "action_switch_camera"
 
         private val _monitoringState = MutableStateFlow(MonitoringState())
         val monitoringState = _monitoringState.asStateFlow()
@@ -89,6 +93,10 @@ class BabyMonitorMobileService : LifecycleService() {
             ACTION_START_PARENT_MODE -> startParentMode()
             ACTION_STOP_SERVICE -> stopMonitoring()
             ACTION_TOGGLE_LISTEN -> toggleParentListening()
+            ACTION_START_VIDEO_STREAM -> startVideoStreamingToWatch()
+            ACTION_STOP_VIDEO_STREAM -> stopVideoStreamingToWatch()
+            ACTION_TOGGLE_TORCH -> toggleTorch()
+            ACTION_SWITCH_CAMERA -> switchCamera()
         }
         return START_STICKY
     }

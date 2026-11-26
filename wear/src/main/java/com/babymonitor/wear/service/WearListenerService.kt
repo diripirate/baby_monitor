@@ -20,10 +20,19 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
+import java.io.InputStream
 
 class WearListenerService : WearableListenerService() {
 
     private val scope = CoroutineScope(Dispatchers.IO)
+
+    companion object {
+        // Streams delivered by the Wearable channel callback must be passed
+        // directly to whoever will consume them. We use volatile holders so that
+        // BabyMonitorWearService can pick them up immediately after the intent fires.
+        @Volatile var pendingAudioInputStream: InputStream? = null
+        @Volatile var pendingVideoInputStream: InputStream? = null
+    }
 
     override fun onMessageReceived(messageEvent: MessageEvent) {
         val path = messageEvent.path
@@ -40,23 +49,13 @@ class WearListenerService : WearableListenerService() {
                 showWatchAlarmNotification("¡Movimiento!", "Movimiento en la cuna")
             }
             ProtocolConstants.PATH_CMD_START_AUDIO -> {
-                // Phone is asking watch to stream its mic
-                val intent = Intent(this, BabyMonitorWearService::class.java).apply {
-                    action = "START_AUDIO_STREAM"
-                }
-                startService(intent)
+                startServiceWithAction(BabyMonitorWearService.ACTION_START_AUDIO_STREAM)
             }
             ProtocolConstants.PATH_CMD_STOP_AUDIO -> {
-                val intent = Intent(this, BabyMonitorWearService::class.java).apply {
-                    action = "STOP_AUDIO_STREAM"
-                }
-                startService(intent)
+                startServiceWithAction(BabyMonitorWearService.ACTION_STOP_AUDIO_STREAM)
             }
             ProtocolConstants.PATH_CMD_EXIT -> {
-                val intent = Intent(this, BabyMonitorWearService::class.java).apply {
-                    action = BabyMonitorWearService.ACTION_STOP_SERVICE
-                }
-                startService(intent)
+                startServiceWithAction(BabyMonitorWearService.ACTION_STOP_SERVICE)
             }
         }
     }
@@ -68,21 +67,29 @@ class WearListenerService : WearableListenerService() {
                 val inputStream = Wearable.getChannelClient(this@WearListenerService)
                     .getInputStream(channel).await()
 
-                if (channel.path == ProtocolConstants.CHANNEL_AUDIO) {
-                    val intent = Intent(this@WearListenerService, BabyMonitorWearService::class.java).apply {
-                        action = "AUDIO_STREAM_RECEIVED"
+                when (channel.path) {
+                    ProtocolConstants.CHANNEL_AUDIO -> {
+                        // Store stream so BabyMonitorWearService can retrieve it
+                        pendingAudioInputStream = inputStream
+                        startServiceWithAction(BabyMonitorWearService.ACTION_AUDIO_STREAM_READY)
                     }
-                    startService(intent)
-                } else if (channel.path == ProtocolConstants.CHANNEL_VIDEO) {
-                    val intent = Intent(this@WearListenerService, BabyMonitorWearService::class.java).apply {
-                        action = "VIDEO_STREAM_RECEIVED"
+                    ProtocolConstants.CHANNEL_VIDEO -> {
+                        // Store stream so BabyMonitorWearService can retrieve it
+                        pendingVideoInputStream = inputStream
+                        startServiceWithAction(BabyMonitorWearService.ACTION_VIDEO_STREAM_READY)
                     }
-                    startService(intent)
                 }
             } catch (e: Exception) {
-                Log.e("WearListenerService", "Error handling channel stream", e)
+                Log.e("WearListenerService", "Error opening channel stream", e)
             }
         }
+    }
+
+    private fun startServiceWithAction(action: String) {
+        val intent = Intent(this, BabyMonitorWearService::class.java).apply {
+            this.action = action
+        }
+        startService(intent)
     }
 
     private fun vibrateWatch() {
@@ -109,7 +116,7 @@ class WearListenerService : WearableListenerService() {
             this, 0, openAppIntent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
-        val notification = NotificationCompat.Builder(this, ProtocolConstants.CHANNEL_ID_ALARM)
+        val notification = androidx.core.app.NotificationCompat.Builder(this, ProtocolConstants.CHANNEL_ID_ALARM)
             .setContentTitle(title)
             .setContentText(message)
             .setSmallIcon(android.R.drawable.stat_notify_error)
